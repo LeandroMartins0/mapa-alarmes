@@ -5,6 +5,8 @@
   <title>Mapa de Alarmes</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- PapaParse para ler CSV -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
     body, html { margin:0; padding:0; height:100%; }
     #map { width:100%; height:100%; min-height:600px; border-radius:12px; overflow:hidden; }
@@ -28,30 +30,30 @@
     .popup-card { font-size: 13px; }
 
     .chip {
-      display: inline-block; margin: 4px 4px; padding: 4px 8px;
-      border-radius: 12px; font-size: 12px; cursor: pointer; font-weight: bold;
+      display: block; margin: 4px 0; padding: 6px 10px;
+      border-radius: 12px; font-size: 13px; cursor: pointer; font-weight: bold;
     }
     .chip:hover { opacity: 0.8; }
     .chip.active { background: #e74c3c; color: #fff; }
     .chip.normal { background: #27ae60; color: #fff; }
-    .chip.critica { background: #8e44ad; color: #fff; }
+    .chip.critica { background: #c0392b; color: #fff; }
     .chip.alta { background: #d35400; color: #fff; }
     .chip.media { background: #2980b9; color: #fff; }
-    .chip.baixa { background: #16a085; color: #fff; }
+    .chip.warning { background: #f1c40f; color: #000; }
+    .chip.info { background: #16a085; color: #fff; }
 
     .summary-box {
-      background: rgba(255,255,255,0.95); padding: 8px;
-      border-radius: 8px; font-size: 12px;
+      background: rgba(255,255,255,0.95); padding: 10px;
+      border-radius: 10px; font-size: 13px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-      max-width: 220px;
+      max-width: 250px;
     }
-    .summary-section { margin-bottom: 6px; }
     .summary-section h4 {
-      margin: 0 0 4px; font-size: 13px;
-      border-bottom: 1px solid #ddd; padding-bottom: 2px; color: #444;
+      margin: 6px 0; font-size: 14px;
+      border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #444;
     }
     .city-list {
-      font-size: 11px; margin: 2px 0 6px 0; padding-left: 8px;
+      font-size: 12px; margin: 2px 0 6px 0; padding-left: 12px;
       color: #333; display: none;
     }
   </style>
@@ -67,117 +69,122 @@
       maxZoom: 19
     }).addTo(map);
 
-    // 🔹 MOCK de alarmes
-    const alarmes = [
-      { Cidade: "São Paulo", Estado: "SP", Latitude: -23.5505, Longitude: -46.6333, Regional: "Sudeste", alarm_name: "Falha de energia", alarm_severity: "Alta", alarm_group: "Infraestrutura", alarm_active: 1 },
-      { Cidade: "Rio de Janeiro", Estado: "RJ", Latitude: -22.9068, Longitude: -43.1729, Regional: "Sudeste", alarm_name: "Latência alta", alarm_severity: "Média", alarm_group: "Rede", alarm_active: 0 },
-      { Cidade: "Belo Horizonte", Estado: "MG", Latitude: -19.9167, Longitude: -43.9345, Regional: "Sudeste", alarm_name: "Perda de conexão", alarm_severity: "Crítica", alarm_group: "Rede", alarm_active: 1 },
-      { Cidade: "Brasília", Estado: "DF", Latitude: -15.7939, Longitude: -47.8828, Regional: "Centro-Oeste", alarm_name: "Instabilidade", alarm_severity: "Baixa", alarm_group: "Aplicação", alarm_active: 0 },
-      { Cidade: "Salvador", Estado: "BA", Latitude: -12.9777, Longitude: -38.5016, Regional: "Nordeste", alarm_name: "Falha no link", alarm_severity: "Alta", alarm_group: "Rede", alarm_active: 1 }
-    ];
-
     const markers = [];
-    const grupos = { ativos: [], normais: [], critica: [], alta: [], media: [], baixa: [] };
+    const grupos = { ativos: [], normais: [], critica: [], alta: [], media: [], warning: [], info: [] };
 
-    alarmes.forEach(d => {
-      const ativo = d.alarm_active == 1;
-      const icon = L.divIcon({
-        className: "",
-        html: `<span class="${ativo ? "blinking-icon" : "normal-icon"}"></span>`,
-        iconSize: [20, 20]
-      });
-      const marker = L.marker([d.Latitude, d.Longitude], { icon }).addTo(map);
+    // 🔹 Carregar dados reais do CSV
+    Papa.parse("eletro.csv", {
+      download: true,
+      header: true,
+      complete: function(results) {
+        const dados = results.data;
 
-      marker.bindPopup(`
-        <div class="popup-card">
-          <h3>${d.Cidade}/${d.Estado}</h3>
-          <b>Status:</b> ${ativo ? "🚨 Ativo" : "✅ Normal"}<br>
-          <b>Alarme:</b> ${d.alarm_name}<br>
-          <b>Severidade:</b> ${d.alarm_severity}<br>
-          <b>Grupo:</b> ${d.alarm_group}<br>
-          <b>Região:</b> ${d.Regional}
-        </div>
-      `);
+        dados.forEach(d => {
+          if (!d.Latitude || !d.Longitude) return;
 
-      markers.push(marker);
+          const ativo = d.alarm_active == "1";
+          const icon = L.divIcon({
+            className: "",
+            html: `<span class="${ativo ? "blinking-icon" : "normal-icon"}"></span>`,
+            iconSize: [20, 20]
+          });
+          const marker = L.marker([parseFloat(d.Latitude), parseFloat(d.Longitude)], { icon }).addTo(map);
 
-      if (ativo) grupos.ativos.push({ marker, label: `${d.Cidade}/${d.Estado}` });
-      else grupos.normais.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          marker.bindPopup(`
+            <div class="popup-card">
+              <h3>${d.Cidade || "N/A"}/${d.Estado || ""}</h3>
+              <b>Status:</b> ${ativo ? "🚨 Ativo" : "✅ Normal"}<br>
+              <b>Alarme:</b> ${d.alarm_name || "N/A"}<br>
+              <b>Severidade:</b> ${d.alarm_severity || "N/A"}<br>
+              <b>Grupo:</b> ${d.alarm_group || "N/A"}<br>
+              <b>Região:</b> ${d.Regional || "N/A"}
+            </div>
+          `);
 
-      const sev = d.alarm_severity.toLowerCase();
-      if (sev.includes("crític")) grupos.critica.push({ marker, label: `${d.Cidade}/${d.Estado}` });
-      if (sev.includes("alta")) grupos.alta.push({ marker, label: `${d.Cidade}/${d.Estado}` });
-      if (sev.includes("média")) grupos.media.push({ marker, label: `${d.Cidade}/${d.Estado}` });
-      if (sev.includes("baixa")) grupos.baixa.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          markers.push(marker);
+
+          if (ativo) grupos.ativos.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          else grupos.normais.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+
+          // 🔹 Normalizar severidades
+          const sev = (d.alarm_severity || "").toUpperCase().trim();
+          if (sev === "CRITICAL") grupos.critica.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          if (sev === "MAJOR") grupos.alta.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          if (sev === "MINOR") grupos.media.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          if (sev === "WARNING") grupos.warning.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+          if (sev === "INFO") grupos.info.push({ marker, label: `${d.Cidade}/${d.Estado}` });
+        });
+
+        if (markers.length > 0) {
+          const group = L.featureGroup(markers).getBounds();
+          map.fitBounds(group);
+        }
+
+        // 🔹 Resumo interativo
+        const resumoControl = L.control({ position: "topright" });
+        resumoControl.onAdd = function() {
+          const div = L.DomUtil.create("div", "summary-box");
+          div.innerHTML = `
+            <div class="summary-section">
+              <h4>Status Operacional</h4>
+              <div class="chip active">Ativos: ${grupos.ativos.length}</div>
+              <div class="city-list" id="ativos-list"></div>
+              <div class="chip normal">Normais: ${grupos.normais.length}</div>
+              <div class="city-list" id="normais-list"></div>
+            </div>
+            <div class="summary-section">
+              <h4>Severidades</h4>
+              <div class="chip critica">Crítica: ${grupos.critica.length}</div>
+              <div class="city-list" id="critica-list"></div>
+              <div class="chip alta">Alta: ${grupos.alta.length}</div>
+              <div class="city-list" id="alta-list"></div>
+              <div class="chip media">Média: ${grupos.media.length}</div>
+              <div class="city-list" id="media-list"></div>
+              <div class="chip warning">Aviso: ${grupos.warning.length}</div>
+              <div class="city-list" id="warning-list"></div>
+              <div class="chip info">Informativo: ${grupos.info.length}</div>
+              <div class="city-list" id="info-list"></div>
+            </div>
+          `;
+          return div;
+        };
+        resumoControl.addTo(map);
+
+        // 🔹 Interatividade
+        setTimeout(() => {
+          document.querySelectorAll(".chip").forEach(chip => {
+            const type = chip.classList[1];
+            const group = grupos[type];
+
+            chip.addEventListener("mouseenter", () => {
+              const listDiv = document.getElementById(`${type}-list`);
+              if (listDiv && group) {
+                listDiv.style.display = "block";
+                listDiv.innerHTML = group.map(g => `• ${g.label}`).join("<br>");
+              }
+            });
+
+            chip.addEventListener("mouseleave", () => {
+              const listDiv = document.getElementById(`${type}-list`);
+              if (listDiv) listDiv.style.display = "none";
+            });
+
+            chip.addEventListener("click", () => {
+              if (group && group.length > 0) {
+                const fg = L.featureGroup(group.map(g => g.marker));
+                map.fitBounds(fg.getBounds(), { maxZoom: 10 });
+                markers.forEach(m => m.getElement().style.opacity = 0.3);
+                group.forEach(g => g.marker.getElement().style.opacity = 1);
+              }
+            });
+          });
+
+          map.on("click", () => {
+            markers.forEach(m => m.getElement().style.opacity = 1);
+          });
+        }, 500);
+      }
     });
-
-    if (markers.length > 0) {
-      const group = L.featureGroup(markers.map(m => m)).getBounds();
-      map.fitBounds(group);
-    }
-
-    // 🔹 Resumo em chips (separados)
-    const resumoControl = L.control({ position: "topright" });
-    resumoControl.onAdd = function() {
-      const div = L.DomUtil.create("div", "summary-box");
-      div.innerHTML = `
-        <div class="summary-section">
-          <h4>Status Operacional</h4>
-          <div class="chip active">Ativos: ${grupos.ativos.length}</div>
-          <div class="city-list" id="ativos-list"></div>
-          <div class="chip normal">Normais: ${grupos.normais.length}</div>
-          <div class="city-list" id="normais-list"></div>
-        </div>
-        <div class="summary-section">
-          <h4>Severidades</h4>
-          <div class="chip critica">Crítica: ${grupos.critica.length}</div>
-          <div class="city-list" id="critica-list"></div>
-          <div class="chip alta">Alta: ${grupos.alta.length}</div>
-          <div class="city-list" id="alta-list"></div>
-          <div class="chip media">Média: ${grupos.media.length}</div>
-          <div class="city-list" id="media-list"></div>
-          <div class="chip baixa">Baixa: ${grupos.baixa.length}</div>
-          <div class="city-list" id="baixa-list"></div>
-        </div>
-      `;
-      return div;
-    };
-    resumoControl.addTo(map);
-
-    // 🔹 Interatividade chips
-    setTimeout(() => {
-      document.querySelectorAll(".chip").forEach(chip => {
-        const type = chip.classList[1]; // active, normal, critica, etc
-        const group = grupos[type];
-
-        chip.addEventListener("mouseenter", () => {
-          const listDiv = document.getElementById(`${type}-list`);
-          if (listDiv && group) {
-            listDiv.style.display = "block";
-            listDiv.innerHTML = group.map(g => `• ${g.label}`).join("<br>");
-          }
-        });
-
-        chip.addEventListener("mouseleave", () => {
-          const listDiv = document.getElementById(`${type}-list`);
-          if (listDiv) listDiv.style.display = "none";
-        });
-
-        chip.addEventListener("click", () => {
-          if (group && group.length > 0) {
-            const fg = L.featureGroup(group.map(g => g.marker));
-            map.fitBounds(fg.getBounds(), { maxZoom: 10 });
-            markers.forEach(m => m.getElement().style.opacity = 0.3);
-            group.forEach(g => g.marker.getElement().style.opacity = 1);
-          }
-        });
-      });
-
-      // resetar filtro ao clicar no mapa
-      map.on("click", () => {
-        markers.forEach(m => m.getElement().style.opacity = 1);
-      });
-    }, 500);
   </script>
 </body>
 </html>
