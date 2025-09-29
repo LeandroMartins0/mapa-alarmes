@@ -5,7 +5,6 @@
   <title>Mapa de Alarmes</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- PapaParse para ler CSV -->
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
   <style>
     body, html { margin:0; padding:0; height:100%; }
@@ -41,6 +40,7 @@
     .chip.media { background: #2980b9; color: #fff; }
     .chip.warning { background: #f1c40f; color: #000; }
     .chip.info { background: #16a085; color: #fff; }
+    .chip.reset { background: #34495e; color: #fff; text-align: center; }
 
     .summary-box {
       background: rgba(255,255,255,0.95); padding: 10px;
@@ -62,7 +62,17 @@
   <div id="map"></div>
 
   <script>
-    const map = L.map("map").setView([-15.78, -47.93], 4);
+    // 🔹 Limite geográfico Brasil (com folga extra)
+    const brasilBounds = L.latLngBounds(
+      L.latLng(-35.0, -85.0),  // sudoeste (latitude menor, longitude mais a oeste)
+      L.latLng(10.0, -25.0)    // nordeste (latitude maior, longitude mais a leste)
+    );
+
+    const map = L.map("map", {
+      maxBounds: brasilBounds,
+      maxBoundsViscosity: 1.0
+    }).setView([-15.78, -47.93], 4);
+
     L.tileLayer("https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}{r}.png", {
       attribution: "&copy; OSM & CARTO",
       subdomains: "abcd",
@@ -72,7 +82,7 @@
     const markers = [];
     const grupos = { ativos: [], normais: [], critica: [], alta: [], media: [], warning: [], info: [] };
 
-    // 🔹 Carregar dados reais do CSV
+    // 🔹 Carregar dados CSV
     Papa.parse("eletro.csv", {
       download: true,
       header: true,
@@ -82,13 +92,22 @@
         dados.forEach(d => {
           if (!d.Latitude || !d.Longitude) return;
 
+          const lat = parseFloat(d.Latitude);
+          const lng = parseFloat(d.Longitude);
+
+          // ⚠️ Ignorar pontos fora do Brasil
+          if (!brasilBounds.contains([lat, lng])) {
+            console.log("Ponto ignorado (fora do Brasil):", d.Cidade, d.Estado, lat, lng);
+            return;
+          }
+
           const ativo = d.alarm_active == "1";
           const icon = L.divIcon({
             className: "",
             html: `<span class="${ativo ? "blinking-icon" : "normal-icon"}"></span>`,
             iconSize: [20, 20]
           });
-          const marker = L.marker([parseFloat(d.Latitude), parseFloat(d.Longitude)], { icon }).addTo(map);
+          const marker = L.marker([lat, lng], { icon }).addTo(map);
 
           marker.bindPopup(`
             <div class="popup-card">
@@ -106,7 +125,6 @@
           if (ativo) grupos.ativos.push({ marker, label: `${d.Cidade}/${d.Estado}` });
           else grupos.normais.push({ marker, label: `${d.Cidade}/${d.Estado}` });
 
-          // 🔹 Normalizar severidades
           const sev = (d.alarm_severity || "").toUpperCase().trim();
           if (sev === "CRITICAL") grupos.critica.push({ marker, label: `${d.Cidade}/${d.Estado}` });
           if (sev === "MAJOR") grupos.alta.push({ marker, label: `${d.Cidade}/${d.Estado}` });
@@ -120,67 +138,54 @@
           map.fitBounds(group);
         }
 
-        // 🔹 Resumo interativo
+        // 🔹 Caixa de filtros
         const resumoControl = L.control({ position: "topright" });
         resumoControl.onAdd = function() {
           const div = L.DomUtil.create("div", "summary-box");
           div.innerHTML = `
             <div class="summary-section">
-              <h4>Status Operacional</h4>
+              <h4>Status</h4>
               <div class="chip active">Ativos: ${grupos.ativos.length}</div>
-              <div class="city-list" id="ativos-list"></div>
               <div class="chip normal">Normais: ${grupos.normais.length}</div>
-              <div class="city-list" id="normais-list"></div>
             </div>
             <div class="summary-section">
-              <h4>Severidades</h4>
+              <h4>Severidade</h4>
               <div class="chip critica">Crítica: ${grupos.critica.length}</div>
-              <div class="city-list" id="critica-list"></div>
               <div class="chip alta">Alta: ${grupos.alta.length}</div>
-              <div class="city-list" id="alta-list"></div>
               <div class="chip media">Média: ${grupos.media.length}</div>
-              <div class="city-list" id="media-list"></div>
               <div class="chip warning">Aviso: ${grupos.warning.length}</div>
-              <div class="city-list" id="warning-list"></div>
               <div class="chip info">Informativo: ${grupos.info.length}</div>
-              <div class="city-list" id="info-list"></div>
+            </div>
+            <div class="summary-section">
+              <div class="chip reset">🔄 Resetar Filtros</div>
             </div>
           `;
           return div;
         };
         resumoControl.addTo(map);
 
-        // 🔹 Interatividade
+        // 🔹 Interatividade de filtros
+        function aplicarFiltro(group) {
+          if (group && group.length > 0) {
+            const fg = L.featureGroup(group.map(g => g.marker));
+            map.fitBounds(fg.getBounds(), { maxZoom: 10 });
+            markers.forEach(m => m.getElement().style.opacity = 0.2);
+            group.forEach(g => g.marker.getElement().style.opacity = 1);
+          }
+        }
+
         setTimeout(() => {
           document.querySelectorAll(".chip").forEach(chip => {
             const type = chip.classList[1];
-            const group = grupos[type];
-
-            chip.addEventListener("mouseenter", () => {
-              const listDiv = document.getElementById(`${type}-list`);
-              if (listDiv && group) {
-                listDiv.style.display = "block";
-                listDiv.innerHTML = group.map(g => `• ${g.label}`).join("<br>");
-              }
-            });
-
-            chip.addEventListener("mouseleave", () => {
-              const listDiv = document.getElementById(`${type}-list`);
-              if (listDiv) listDiv.style.display = "none";
-            });
-
-            chip.addEventListener("click", () => {
-              if (group && group.length > 0) {
-                const fg = L.featureGroup(group.map(g => g.marker));
-                map.fitBounds(fg.getBounds(), { maxZoom: 10 });
-                markers.forEach(m => m.getElement().style.opacity = 0.3);
-                group.forEach(g => g.marker.getElement().style.opacity = 1);
-              }
-            });
-          });
-
-          map.on("click", () => {
-            markers.forEach(m => m.getElement().style.opacity = 1);
+            if (type === "reset") {
+              chip.addEventListener("click", () => {
+                markers.forEach(m => m.getElement().style.opacity = 1);
+                map.fitBounds(brasilBounds);
+              });
+            } else {
+              const group = grupos[type];
+              chip.addEventListener("click", () => aplicarFiltro(group));
+            }
           });
         }, 500);
       }
