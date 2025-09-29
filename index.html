@@ -6,6 +6,11 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- Cluster plugin -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
   <style>
     body, html { margin:0; padding:0; height:100%; }
     #map { width:100%; height:100%; min-height:600px; border-radius:12px; overflow:hidden; }
@@ -31,8 +36,9 @@
     .chip {
       display: block; margin: 4px 0; padding: 6px 10px;
       border-radius: 12px; font-size: 13px; cursor: pointer; font-weight: bold;
+      transition: all 0.2s;
     }
-    .chip:hover { opacity: 0.8; }
+    .chip:hover { opacity: 0.9; transform: scale(1.03); }
     .chip.active { background: #e74c3c; color: #fff; }
     .chip.normal { background: #27ae60; color: #fff; }
     .chip.critica { background: #c0392b; color: #fff; }
@@ -41,20 +47,30 @@
     .chip.warning { background: #f1c40f; color: #000; }
     .chip.info { background: #16a085; color: #fff; }
     .chip.reset { background: #34495e; color: #fff; text-align: center; }
+    .chip.toggle-cluster { background: #8e44ad; color: #fff; text-align: center; }
+
+    .chip.selected { border: 2px solid #000; }
 
     .summary-box {
       background: rgba(255,255,255,0.95); padding: 10px;
       border-radius: 10px; font-size: 13px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-      max-width: 250px;
+      max-width: 260px;
     }
     .summary-section h4 {
       margin: 6px 0; font-size: 14px;
       border-bottom: 1px solid #ddd; padding-bottom: 4px; color: #444;
     }
-    .city-list {
-      font-size: 12px; margin: 2px 0 6px 0; padding-left: 12px;
-      color: #333; display: none;
+
+    .legend {
+      line-height: 16px; color: #333;
+      background: rgba(255,255,255,0.9);
+      padding: 8px; border-radius: 6px;
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-block; width: 12px; height: 12px;
+      margin-right: 6px; border-radius: 50%;
     }
   </style>
 </head>
@@ -62,15 +78,15 @@
   <div id="map"></div>
 
   <script>
-    // 🔹 Limite geográfico Brasil (com folga extra)
+    // 🔹 Limite geográfico Brasil (com folga)
     const brasilBounds = L.latLngBounds(
-      L.latLng(-35.0, -85.0),  // sudoeste (latitude menor, longitude mais a oeste)
-      L.latLng(10.0, -25.0)    // nordeste (latitude maior, longitude mais a leste)
+      L.latLng(-35.0, -85.0),
+      L.latLng(10.0, -25.0)
     );
 
     const map = L.map("map", {
       maxBounds: brasilBounds,
-      maxBoundsViscosity: 1.0
+      maxBoundsViscosity: 0.8
     }).setView([-15.78, -47.93], 4);
 
     L.tileLayer("https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}{r}.png", {
@@ -79,10 +95,16 @@
       maxZoom: 19
     }).addTo(map);
 
-    const markers = [];
+    const allMarkers = [];
     const grupos = { ativos: [], normais: [], critica: [], alta: [], media: [], warning: [], info: [] };
 
-    // 🔹 Carregar dados CSV
+    // Cluster toggle
+    const clusterGroup = L.markerClusterGroup();
+    const markerLayer = L.layerGroup(); // camada simples
+    let clusterEnabled = true;
+    map.addLayer(clusterGroup);
+
+    // 🔹 Carregar CSV
     Papa.parse("eletro.csv", {
       download: true,
       header: true,
@@ -91,15 +113,9 @@
 
         dados.forEach(d => {
           if (!d.Latitude || !d.Longitude) return;
-
           const lat = parseFloat(d.Latitude);
           const lng = parseFloat(d.Longitude);
-
-          // ⚠️ Ignorar pontos fora do Brasil
-          if (!brasilBounds.contains([lat, lng])) {
-            console.log("Ponto ignorado (fora do Brasil):", d.Cidade, d.Estado, lat, lng);
-            return;
-          }
+          if (!brasilBounds.contains([lat, lng])) return;
 
           const ativo = d.alarm_active == "1";
           const icon = L.divIcon({
@@ -107,8 +123,8 @@
             html: `<span class="${ativo ? "blinking-icon" : "normal-icon"}"></span>`,
             iconSize: [20, 20]
           });
-          const marker = L.marker([lat, lng], { icon }).addTo(map);
 
+          const marker = L.marker([lat, lng], { icon });
           marker.bindPopup(`
             <div class="popup-card">
               <h3>${d.Cidade || "N/A"}/${d.Estado || ""}</h3>
@@ -120,7 +136,9 @@
             </div>
           `);
 
-          markers.push(marker);
+          allMarkers.push(marker);
+          clusterGroup.addLayer(marker);
+          markerLayer.addLayer(marker);
 
           if (ativo) grupos.ativos.push({ marker, label: `${d.Cidade}/${d.Estado}` });
           else grupos.normais.push({ marker, label: `${d.Cidade}/${d.Estado}` });
@@ -133,8 +151,8 @@
           if (sev === "INFO") grupos.info.push({ marker, label: `${d.Cidade}/${d.Estado}` });
         });
 
-        if (markers.length > 0) {
-          const group = L.featureGroup(markers).getBounds();
+        if (allMarkers.length > 0) {
+          const group = L.featureGroup(allMarkers).getBounds();
           map.fitBounds(group);
         }
 
@@ -158,36 +176,80 @@
             </div>
             <div class="summary-section">
               <div class="chip reset">🔄 Resetar Filtros</div>
+              <div class="chip toggle-cluster">🟣 Cluster ON/OFF</div>
             </div>
           `;
           return div;
         };
         resumoControl.addTo(map);
 
-        // 🔹 Interatividade de filtros
-        function aplicarFiltro(group) {
-          if (group && group.length > 0) {
-            const fg = L.featureGroup(group.map(g => g.marker));
+        // 🔹 Filtros
+        let filtrosAtivos = new Set();
+        function aplicarFiltros() {
+          allMarkers.forEach(m => {
+            const el = m.getElement();
+            if (el) el.style.opacity = 0.2;
+          });
+          let ativos = [];
+          filtrosAtivos.forEach(f => ativos = ativos.concat(grupos[f] || []));
+          if (ativos.length === 0) {
+            allMarkers.forEach(m => m.getElement()?.style && (m.getElement().style.opacity = 1));
+            map.fitBounds(brasilBounds);
+          } else {
+            ativos.forEach(g => g.marker.getElement().style.opacity = 1);
+            const fg = L.featureGroup(ativos.map(g => g.marker));
             map.fitBounds(fg.getBounds(), { maxZoom: 10 });
-            markers.forEach(m => m.getElement().style.opacity = 0.2);
-            group.forEach(g => g.marker.getElement().style.opacity = 1);
           }
         }
 
         setTimeout(() => {
           document.querySelectorAll(".chip").forEach(chip => {
             const type = chip.classList[1];
-            if (type === "reset") {
-              chip.addEventListener("click", () => {
-                markers.forEach(m => m.getElement().style.opacity = 1);
-                map.fitBounds(brasilBounds);
-              });
-            } else {
-              const group = grupos[type];
-              chip.addEventListener("click", () => aplicarFiltro(group));
-            }
+            chip.addEventListener("click", () => {
+              if (type === "reset") {
+                filtrosAtivos.clear();
+                document.querySelectorAll(".chip").forEach(c => c.classList.remove("selected"));
+                aplicarFiltros();
+              } else if (type === "toggle-cluster") {
+                if (clusterEnabled) {
+                  map.removeLayer(clusterGroup);
+                  map.addLayer(markerLayer);
+                  clusterEnabled = false;
+                } else {
+                  map.removeLayer(markerLayer);
+                  map.addLayer(clusterGroup);
+                  clusterEnabled = true;
+                }
+              } else {
+                if (filtrosAtivos.has(type)) {
+                  filtrosAtivos.delete(type);
+                  chip.classList.remove("selected");
+                } else {
+                  filtrosAtivos.add(type);
+                  chip.classList.add("selected");
+                }
+                aplicarFiltros();
+              }
+            });
           });
         }, 500);
+
+        // 🔹 Legenda
+        const legend = L.control({ position: "bottomleft" });
+        legend.onAdd = function() {
+          const div = L.DomUtil.create("div", "legend");
+          div.innerHTML = `
+            <div><span style="background:red"></span> Ativo</div>
+            <div><span style="background:#2ecc71"></span> Normal</div>
+            <div><span style="background:#c0392b"></span> Crítica</div>
+            <div><span style="background:#d35400"></span> Alta</div>
+            <div><span style="background:#2980b9"></span> Média</div>
+            <div><span style="background:#f1c40f"></span> Aviso</div>
+            <div><span style="background:#16a085"></span> Informativo</div>
+          `;
+          return div;
+        };
+        legend.addTo(map);
       }
     });
   </script>
